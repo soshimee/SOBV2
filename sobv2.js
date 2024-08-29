@@ -1,5 +1,5 @@
 (async () => {
-	(function(){var w=window,C='___grecaptcha_cfg',cfg=w[C]=w[C]||{},N='grecaptcha';var gr=w[N]=w[N]||{};gr.ready=gr.ready||function(f){(cfg['fns']=cfg['fns']||[]).push(f);};w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';(cfg['render']=cfg['render']||[]).push('onload');w['__google_recaptcha_client']=true;var d=document,po=d.createElement('script');po.type='text/javascript';po.async=true;po.src='https://www.gstatic.com/recaptcha/releases/CHIHFAf1bjFPOjwwi5Xa4cWR/recaptcha__ko.js';po.crossOrigin='anonymous';po.integrity='sha384-3ixG05K3/O+UzfsLo88Ri1RQG5M4r7McMuhCB2e0QHP2rfu2zlqugMd4PrILOX5Z';var e=d.querySelector('script[nonce]'),n=e&&(e['nonce']||e.getAttribute('nonce'));if(n){po.setAttribute('nonce',n);}var s=d.getElementsByTagName('script')[0];s.parentNode.insertBefore(po, s);})();
+	(function(){var w=window,C='___grecaptcha_cfg',cfg=w[C]=w[C]||{},N='grecaptcha';var gr=w[N]=w[N]||{};gr.ready=gr.ready||function(f){(cfg['fns']=cfg['fns']||[]).push(f);};w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';(cfg['render']=cfg['render']||[]).push('explicit');(cfg['onload']=cfg['onload']||[]).push('onloadCallback');w['__google_recaptcha_client']=true;var d=document,po=d.createElement('script');po.type='text/javascript';po.async=true; po.charset='utf-8';po.src='https://www.gstatic.com/recaptcha/releases/WV-mUKO4xoWKy9M4ZzRyNrP_/recaptcha__en.js';po.crossOrigin='anonymous';po.integrity='sha384-1TUNDcvWQ6Ms5xMd7JPWn58lx7KCTI21j1WEYm2E+AxZi1T3AogJVuz8TFKxqipQ';var e=d.querySelector('script[nonce]'),n=e&&(e['nonce']||e.getAttribute('nonce'));if(n){po.setAttribute('nonce',n);}var s=d.getElementsByTagName('script')[0];s.parentNode.insertBefore(po, s);})();
 
 	function getDefaultVariable(name) {
 		const iframe = document.createElement("iframe");
@@ -768,6 +768,7 @@
 		let chunkTool;
 		let pasteTool;
 		let textTool;
+		let fillTool;
 		let ws;
 		let permanent = false;
 		let sneaky = false;
@@ -877,6 +878,7 @@
 		const queueFunction = () => {
 			for (const client of clients.filter(client => client.net.isWorldConnected && client.net.isWebsocketConnected)) {
 				client.net.bucket.update();
+				if (client.net.bucket.allowance < 45) return;
 				while (client.net.bucket.allowance >= 5 && queue.length) {
 					const queueElement = queue.pop();
 					const x = queueElement.position[0];
@@ -888,6 +890,7 @@
 
 					if (!oldPixel) {
 						queue.push(queueElement);
+						return;
 					} else if (oldPixel[0] !== r || oldPixel[1] !== g || oldPixel[2] !== b) {
 						client.world.setPixel(x, y, [r, g, b], sneaky);
 						const chunk = OWOP.misc.world.chunks[Math.floor(x / protocol.chunkSize) + "," + Math.floor(y / protocol.chunkSize)];
@@ -1051,6 +1054,7 @@
 					let y = mouse.tileY;
 
 					const preQueue = structuredClone(imageData);
+					preQueue.sort((a, b) => colorUtils.u24_888(a.color[0], a.color[1], a.color[2]) - colorUtils.u24_888(b.color[0], b.color[1], b.color[2]));
 					preQueue.forEach(queueElement => queueElement.position[0] += x);
 					preQueue.forEach(queueElement => queueElement.position[1] += y);
 					for (const pixel of preQueue) {
@@ -1138,6 +1142,106 @@
 
 			addTool(textTool);
 
+			fillTool = new Tool("SOBv2 Fill", cursors.fill, PLAYERFX.NONE, RANK.USER, tool => {
+				tool.extra.tickAmount = 9;
+				let queue = [];
+				let fillingColor = null;
+				let defaultFx = PLAYERFX.RECT_SELECT_ALIGNED(1);
+				tool.setFxRenderer((fx, ctx, time) => {
+					ctx.globalAlpha = 0.8;
+					ctx.strokeStyle = fx.extra.player.htmlRgb;
+					let z = OWOP.camera.zoom;
+					if (!fillingColor || !fx.extra.isLocalPlayer) {
+						defaultFx(fx, ctx, time);
+					} else {
+						ctx.beginPath();
+						for (let i = 0; i < queue.length; i++) {
+							ctx.rect((queue[i][0] - OWOP.camera.x) * z, (queue[i][1] - OWOP.camera.y) * z, z, z);
+						}
+						ctx.stroke();
+					}
+				});
+				const tick = () => {
+					const eq = (a, b) => a && b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+					const check = (x, y) => {
+						if (eq(misc.world.getPixel(x, y), fillingColor)) {
+							queue.unshift([x, y]);
+							return true;
+						}
+						return false;
+					};
+
+					if (!queue.length || !fillingColor) {
+						return;
+					}
+
+					let selClr = player.selectedColor;
+
+					for (let painted = 0; queue.length; painted++) {
+						let current = queue.pop();
+						let x = current[0];
+						let y = current[1];
+						let thisClr = misc.world.getPixel(x, y);
+						if (eq(thisClr, fillingColor) && !eq(thisClr, selClr)) {
+							clients.forEach(client => client.net.bucket.update());
+							const client = clients.find(client => client.net.isWorldConnected && client.net.isWebsocketConnected && client.net.bucket.allowance >= 5);
+							if (client) {
+								const r = selClr[0];
+								const g = selClr[1];
+								const b = selClr[2];
+
+								client.world.setPixel(x, y, [r, g, b], sneaky);
+								const chunk = OWOP.misc.world.chunks[Math.floor(x / protocol.chunkSize) + "," + Math.floor(y / protocol.chunkSize)];
+								chunk.update(x, y, colorUtils.u24_888(r, g, b));
+								OWOP.eventSys.emit(OWOP.events.renderer.updateChunk, chunk);
+								OWOP.sounds.play(OWOP.sounds.place);
+							} else {
+								queue.push(current);
+								break;
+							}
+
+							let top = check(x, y - 1);
+							let bottom = check(x, y + 1);
+							let left = check(x - 1, y);
+							let right = check(x + 1, y);
+
+							if (top && left) {
+								check(x - 1, y - 1);
+							}
+							if (top && right) {
+								check(x + 1, y - 1);
+							}
+							if (bottom && left) {
+								check(x - 1, y + 1);
+							}
+							if (bottom && right) {
+								check(x + 1, y + 1);
+							}
+						}
+					}
+				}
+
+				tool.setEvent("mousedown", mouse => {
+					if (!(mouse.buttons & 0b100)) {
+						fillingColor = misc.world.getPixel(mouse.tileX, mouse.tileY);
+						if (fillingColor) {
+							queue.push([mouse.tileX, mouse.tileY]);
+							tool.setEvent("tick", tick);
+						}
+					}
+				});
+
+				tool.setEvent("mouseup deselect", mouse => {
+					if (!mouse || !(mouse.buttons & 0b1)) {
+						fillingColor = null;
+						queue = [];
+						tool.setEvent("tick", null);
+					}
+				});
+			});
+
+			addTool(fillTool);
+
 			OWOP.on(OWOP.events.tick, queueFunction);
 		}
 
@@ -1145,6 +1249,8 @@
 			OWOP.removeListener(OWOP.events.tick, queueFunction);
 			delete tools[chunkTool.id];
 			delete tools[pasteTool.id];
+			delete tools[textTool.id];
+			delete tools[fillTool.id];
 			updateToolbar();
 			mainWindow.close();
 		}
