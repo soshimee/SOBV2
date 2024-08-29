@@ -765,7 +765,6 @@
 		const protocol = OWOP.require("conf").protocol;
 		const Window = OWOP.windowSys.class.window;
 
-		let queueInterval;
 		let chunkTool;
 		let pasteTool;
 		let textTool;
@@ -813,17 +812,6 @@
 				while (permanentQueue.length) permanentQueue.pop();
 			};
 
-			const queueIntervalLabel = document.createElement("span");
-			queueIntervalLabel.innerText = "QI";
-
-			const queueIntervalInput = document.createElement("input");
-			queueIntervalInput.type = "number";
-			queueIntervalInput.value = 100;
-			queueIntervalInput.oninput = () => {
-				clearInterval(queueInterval);
-				queueInterval = setInterval(queueFunction, parseInt(queueIntervalInput.value));
-			};
-
 			const permanentLabel = document.createElement("span");
 			permanentLabel.innerText = "Permanent";
 
@@ -845,15 +833,15 @@
 			const connections = document.createElement("span");
 			connections.innerHTML = "Connected: <span class=\"sobv2_connected_bots\"></span> | Total: <span class=\"sobv2_bots\"></span>";
 
+			const queueElement = document.createElement("span");
+			queueElement.innerHTML = "Queue: <span class=\"sobv2_queue\"></span>";
+
 			window.addObj(wsLabel);
 			window.addObj(wsInput);
 			window.addObj(document.createElement("br"));
 			window.addObj(connectButton);
 			window.addObj(disconnectButton);
 			window.addObj(clearQueueButton);
-			window.addObj(document.createElement("br"));
-			window.addObj(queueIntervalLabel);
-			window.addObj(queueIntervalInput);
 			window.addObj(document.createElement("br"));
 			window.addObj(permanentLabel);
 			window.addObj(permanentInput);
@@ -862,28 +850,51 @@
 			window.addObj(sneakyInput);
 			window.addObj(document.createElement("br"));
 			window.addObj(connections);
+			window.addObj(document.createElement("br"));
+			window.addObj(queueElement);
 		});
+
+		const colorUtils = {
+			to888: (R, G, B) => [(R * 527 + 23) >> 6, (G * 259 + 33) >> 6, (B * 527 + 23) >> 6],
+			to565: (R, G, B) => [(R * 249 + 1014) >> 11, (G * 253 + 505) >> 10, (B * 249 + 1014) >> 11],
+			u16_565: (R, G, B) => B << 11 | G << 5 | R,
+			u24_888: (R, G, B) => B << 16 | G << 8 | R,
+			u32_888: (R, G, B) => colorUtils.u24_888(R, G, B) | 0xFF000000,
+			u16_565_to_888: color => {
+				const R = ((color & 0b11111) * 527 + 23) >> 6;
+				const G = ((color >> 5 & 0b11111) * 527 + 23) >> 6;
+				const B = ((color >> 11 & 0b11111) * 527 + 23) >> 6;
+				return B << 16 | G << 8 | R;
+			},
+			arrFrom565: color => [color & 0b11111, color >> 5 & 0b111111, color >> 11 & 0b11111],
+			/* Takes an integer, and gives an html compatible color */
+			toHTML: color => {
+				color = (color >> 16 & 0xFF | color & 0xFF00 | color << 16 & 0xFF0000).toString(16);
+				return '#' + ('000000' + color).substring(color.length);
+			}
+		};
 
 		const queueFunction = () => {
 			for (const client of clients.filter(client => client.net.isWorldConnected && client.net.isWebsocketConnected)) {
-				let success = false;
-
-				let i = 0;
-				while (!success && queue.length) {
-					if (i > 256) break;
-
-					const queueElement = queue.shift();
-					let oldPixel = client.world.getPixel(queueElement.position[0], queueElement.position[1]);
+				client.net.bucket.update();
+				while (client.net.bucket.allowance >= 5 && queue.length) {
+					const queueElement = queue.pop();
+					const x = queueElement.position[0];
+					const y = queueElement.position[1];
+					const r = queueElement.color[0];
+					const g = queueElement.color[1];
+					const b = queueElement.color[2];
+					let oldPixel = client.world.getPixel(x, y);
 
 					if (!oldPixel) {
 						queue.push(queueElement);
-						success = true;
-					} else if (oldPixel[0] !== queueElement.color[0] || oldPixel[1] !== queueElement.color[1] || oldPixel[2] !== queueElement.color[2]) {
-						client.world.setPixel(queueElement.position[0], queueElement.position[1], queueElement.color, sneaky);
-						success = true;
+					} else if (oldPixel[0] !== r || oldPixel[1] !== g || oldPixel[2] !== b) {
+						client.world.setPixel(x, y, [r, g, b], sneaky);
+						const chunk = OWOP.misc.world.chunks[Math.floor(x / protocol.chunkSize) + "," + Math.floor(y / protocol.chunkSize)];
+						chunk.update(x, y, colorUtils.u24_888(r, g, b));
+						OWOP.eventSys.emit(OWOP.events.renderer.updateChunk, chunk);
+						OWOP.sounds.play(OWOP.sounds.place);
 					}
-
-					i++;
 				}
 			}
 			if (!queue.length) {
@@ -894,6 +905,7 @@
 			if (document.querySelector("#reconnect-btn").offsetParent) document.querySelector("#reconnect-btn").click();
 			document.querySelector(".sobv2_connected_bots").innerText = clients.filter(client => client.net.isWorldConnected && client.net.isWebsocketConnected).length;
 			document.querySelector(".sobv2_bots").innerText = clients.length;
+			document.querySelector(".sobv2_queue").innerText = queue.length;
 		};
 
 		function install() {
@@ -901,7 +913,35 @@
 
 			chunkTool = new Tool("SOBv2 Chunk", cursors.erase, PLAYERFX.RECT_SELECT_ALIGNED(16), RANK.USER, tool => {
 				let color;
-				tool.setEvent("mousedown mousemove", mouse => {
+				let x, y;
+				const queue = [];
+
+				const tick = () => {
+					for (const client of clients.filter(client => client.net.isWorldConnected && client.net.isWebsocketConnected)) {
+						client.net.bucket.update();
+						while (client.net.bucket.allowance >= 5 && queue.length) {
+							const queueElement = queue.pop();
+							const x = queueElement[0];
+							const y = queueElement[1];
+							const r = color[0];
+							const g = color[1];
+							const b = color[2];
+							let oldPixel = client.world.getPixel(x, y);
+
+							if (!oldPixel) {
+								queue.push(queueElement);
+							} else if (oldPixel[0] !== r || oldPixel[1] !== g || oldPixel[2] !== b) {
+								client.world.setPixel(x, y, [r, g, b], sneaky);
+								const chunk = OWOP.misc.world.chunks[Math.floor(x / protocol.chunkSize) + "," + Math.floor(y / protocol.chunkSize)];
+								chunk.update(x, y, colorUtils.u24_888(r, g, b));
+								OWOP.eventSys.emit(OWOP.events.renderer.updateChunk, chunk);
+								OWOP.sounds.play(OWOP.sounds.place);
+							}
+						}
+					}
+				};
+
+				tool.setEvent("mousemove", mouse => {
 					if (mouse.buttons & 0b1) {
 						color = player.selectedColor;
 					} else if (mouse.buttons & 0b10) {
@@ -910,31 +950,60 @@
 						return;
 					}
 
-					let x = Math.floor(mouse.tileX / protocol.chunkSize);
-					let y = Math.floor(mouse.tileY / protocol.chunkSize);
+					const oldX = x;
+					const oldY = y;
 
-					const preQueue = [];
+					x = Math.floor(mouse.tileX / protocol.chunkSize);
+					y = Math.floor(mouse.tileY / protocol.chunkSize);
+
+					if (x === oldX && y === oldY) return;
+
+					while (queue.length) queue.pop();
 
 					for (let i = 0; i < 16; i++) {
 						for (let j = 0; j < 16; j++) {
 							let qx = x * 16 + j;
 							let qy = y * 16 + i;
 
-							preQueue.push({ position: [qx, qy], color });
+							queue.unshift([qx, qy]);
+						}
+					}
+				});
+
+				tool.setEvent("mousedown", mouse => {
+					if (mouse.buttons & 0b1) {
+						color = player.selectedColor;
+					} else if (mouse.buttons & 0b10) {
+						color = [255, 255, 255];
+					} else {
+						return;
+					}
+
+					x = Math.floor(mouse.tileX / protocol.chunkSize);
+					y = Math.floor(mouse.tileY / protocol.chunkSize);
+
+					while (queue.length) queue.pop();
+
+					for (let i = 0; i < 16; i++) {
+						for (let j = 0; j < 16; j++) {
+							let qx = x * 16 + j;
+							let qy = y * 16 + i;
+
+							queue.unshift([qx, qy]);
 						}
 					}
 
-					preQueue.sort(() => Math.random() - 0.5);
-					for (const pixel of preQueue) {
-						if (permanent) permanentQueue.push(pixel);
-						else queue.push(pixel);
-					}
+					tool.setEvent("tick", tick);
+				});
+
+				tool.setEvent("mouseup", () => {
+					tool.setEvent("tick", null);
 				});
 			});
 
 			addTool(chunkTool);
 
-			pasteTool = new Tool("SOBv2 Paste", cursors.paste, PLAYERFX.NONE, RANK.USER, tool => {
+			pasteTool = new Tool("SOBv2 Paste", cursors.paste, PLAYERFX.RECT_SELECT_ALIGNED(1), RANK.USER, tool => {
 				const imageData = [];
 
 				tool.setEvent("select", () => {
@@ -984,7 +1053,6 @@
 					const preQueue = structuredClone(imageData);
 					preQueue.forEach(queueElement => queueElement.position[0] += x);
 					preQueue.forEach(queueElement => queueElement.position[1] += y);
-					preQueue.sort(() => Math.random() - 0.5);
 					for (const pixel of preQueue) {
 						if (permanent) permanentQueue.push(pixel);
 						else queue.push(pixel);
@@ -994,7 +1062,7 @@
 
 			addTool(pasteTool);
 
-			textTool = new Tool("SOBv2 Text", cursors.write, PLAYERFX.NONE, RANK.USER, tool => {
+			textTool = new Tool("SOBv2 Text", cursors.write, PLAYERFX.RECT_SELECT_ALIGNED(1), RANK.USER, tool => {
 				const imageData = [];
 				const textSelectionWindow = new Window("SOBv2 Text", {}, window => {
 					const textInput = document.createElement("input");
@@ -1061,7 +1129,6 @@
 					const preQueue = structuredClone(imageData);
 					preQueue.forEach(queueElement => queueElement.position[0] += x);
 					preQueue.forEach(queueElement => queueElement.position[1] += y);
-					preQueue.sort(() => Math.random() - 0.5);
 					for (const pixel of preQueue) {
 						if (permanent) permanentQueue.push(pixel);
 						else queue.push(pixel);
@@ -1071,11 +1138,11 @@
 
 			addTool(textTool);
 
-			queueInterval = setInterval(queueFunction, 100);
+			OWOP.on(OWOP.events.tick, queueFunction);
 		}
 
 		function uninstall() {
-			clearInterval(queueInterval);
+			OWOP.removeListener(OWOP.events.tick, queueFunction);
 			delete tools[chunkTool.id];
 			delete tools[pasteTool.id];
 			updateToolbar();
