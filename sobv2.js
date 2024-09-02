@@ -916,24 +916,23 @@
 
 			chunkTool = new Tool("SOBv2 Chunk", cursors.erase, PLAYERFX.RECT_SELECT_ALIGNED(16), RANK.USER, tool => {
 				let color;
-				let x, y;
-				const queue = [];
+				let cx, cy;
 
 				const tick = () => {
-					for (const client of clients.filter(client => client.net.isWorldConnected && client.net.isWebsocketConnected)) {
-						client.net.bucket.update();
-						while (client.net.bucket.allowance >= 5 && queue.length) {
-							const queueElement = queue.pop();
-							const x = queueElement[0];
-							const y = queueElement[1];
+					for (let i = 0; i < 16; i++) {
+						for (let j = 0; j < 16; j++) {
+							let x = cx * 16 + j;
+							let y = cy * 16 + i;
+
+							clients.forEach(client => client.net.bucket.update());
+							const client = clients.find(client => client.net.isWorldConnected && client.net.isWebsocketConnected && client.net.bucket.allowance >= 5);
+							if (!client) return;
 							const r = color[0];
 							const g = color[1];
 							const b = color[2];
 							let oldPixel = client.world.getPixel(x, y);
 
-							if (!oldPixel) {
-								queue.push(queueElement);
-							} else if (oldPixel[0] !== r || oldPixel[1] !== g || oldPixel[2] !== b) {
+							if (oldPixel && oldPixel[0] !== r || oldPixel[1] !== g || oldPixel[2] !== b) {
 								client.world.setPixel(x, y, [r, g, b], sneaky);
 								const chunk = OWOP.misc.world.chunks[Math.floor(x / protocol.chunkSize) + "," + Math.floor(y / protocol.chunkSize)];
 								chunk.update(x, y, colorUtils.u24_888(r, g, b));
@@ -953,24 +952,24 @@
 						return;
 					}
 
-					const oldX = x;
-					const oldY = y;
+					// const oldX = x;
+					// const oldY = y;
 
-					x = Math.floor(mouse.tileX / protocol.chunkSize);
-					y = Math.floor(mouse.tileY / protocol.chunkSize);
+					cx = Math.floor(mouse.tileX / protocol.chunkSize);
+					cy = Math.floor(mouse.tileY / protocol.chunkSize);
 
-					if (x === oldX && y === oldY) return;
+					// if (x === oldX && y === oldY) return;
 
-					while (queue.length) queue.pop();
+					// while (queue.length) queue.pop();
 
-					for (let i = 0; i < 16; i++) {
-						for (let j = 0; j < 16; j++) {
-							let qx = x * 16 + j;
-							let qy = y * 16 + i;
+					// for (let i = 0; i < 16; i++) {
+					// 	for (let j = 0; j < 16; j++) {
+					// 		let qx = x * 16 + j;
+					// 		let qy = y * 16 + i;
 
-							queue.unshift([qx, qy]);
-						}
-					}
+					// 		queue.unshift([qx, qy]);
+					// 	}
+					// }
 				});
 
 				tool.setEvent("mousedown", mouse => {
@@ -982,19 +981,19 @@
 						return;
 					}
 
-					x = Math.floor(mouse.tileX / protocol.chunkSize);
-					y = Math.floor(mouse.tileY / protocol.chunkSize);
+					cx = Math.floor(mouse.tileX / protocol.chunkSize);
+					cy = Math.floor(mouse.tileY / protocol.chunkSize);
 
-					while (queue.length) queue.pop();
+					// while (queue.length) queue.pop();
 
-					for (let i = 0; i < 16; i++) {
-						for (let j = 0; j < 16; j++) {
-							let qx = x * 16 + j;
-							let qy = y * 16 + i;
+					// for (let i = 0; i < 16; i++) {
+					// 	for (let j = 0; j < 16; j++) {
+					// 		let qx = x * 16 + j;
+					// 		let qy = y * 16 + i;
 
-							queue.unshift([qx, qy]);
-						}
-					}
+					// 		queue.unshift([qx, qy]);
+					// 	}
+					// }
 
 					tool.setEvent("tick", tick);
 				});
